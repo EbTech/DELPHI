@@ -62,7 +62,7 @@ yesterday_logs_filename = "".join(
 parser = argparse.ArgumentParser()
 parser.add_argument(
     '--user', '-u', type=str, required=True,
-    choices=["omar", "hamza", "michael", "michael2", "ali", "mohammad", "server", "saksham"],
+    choices=["aram", "omar", "hamza", "michael", "michael2", "ali", "mohammad", "server", "saksham"],
     help="Who is the user running? User needs to be referenced in config.yml for the filepaths (e.g. hamza, michael): "
 )
 parser.add_argument(
@@ -205,7 +205,7 @@ def solve_and_predict_area(
             maxT: Maximum # of Days Modeled
             p_d: Percentage of True Cases Detected
             p_v: Percentage of Hospitalized Patients Ventilated,
-            balance: Regularization coefficient between cases and deaths 
+            balance: Regularization coefficient between cases and deaths
             """
             maxT = (default_maxT - date_day_since100).days + 1
             t_cases = validcases["day_since100"].tolist() - validcases.loc[0, "day_since100"]
@@ -254,10 +254,10 @@ def solve_and_predict_area(
                 dEdt = alpha * gamma_t * S * I / N - r_i * E
                 dIdt = r_i * E - r_d * I
                 dARdt = r_d * (1 - p_dth_mod) * (1 - p_d) * I - r_ri * AR
-                dDHRdt = r_d * (1 - p_dth_mod) * p_d * p_h * I - r_rh * DHR
+                dDHRdt = r_d * (1 - p_dth_mod) * p_d * p_h * I - r_rh * DHR     # should multiply entry rate by (1 - p_v)
                 dDQRdt = r_d * (1 - p_dth_mod) * p_d * (1 - p_h) * I - r_ri * DQR
                 dADdt = r_d * p_dth_mod * (1 - p_d) * I - r_dth * AD
-                dDHDdt = r_d * p_dth_mod * p_d * p_h * I - r_dth * DHD
+                dDHDdt = r_d * p_dth_mod * p_d * p_h * I - r_dth * DHD          # should multiply entry rate by (1 - p_v)
                 dDQDdt = r_d * p_dth_mod * p_d * (1 - p_h) * I - r_dth * DQD
                 dRdt = r_ri * (AR + DQR) + r_rh * DHR
                 dDdt = r_dth * (AD + DQD + DHD)
@@ -265,7 +265,7 @@ def solve_and_predict_area(
                 dTHdt = r_d * p_d * p_h * I
                 dDVRdt = r_d * (1 - p_dth_mod) * p_d * p_h * p_v * I - r_rv * DVR
                 dDVDdt = r_d * p_dth_mod * p_d * p_h * p_v * I - r_dth * DVD
-                dDDdt = r_dth * (DHD + DQD)
+                dDDdt = r_dth * (DHD + DQD)                                     # DHD + DQD + DVD
                 dDTdt = r_d * p_d * I
                 return [
                     dSdt, dEdt, dIdt, dARdt, dDHRdt, dDQRdt, dADdt, dDHDdt,

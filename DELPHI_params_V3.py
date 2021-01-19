@@ -3,7 +3,7 @@ from datetime import datetime
 
 # Default parameters - TNC & Trust Region
 date_MATHEMATICA = "2020-05-07"  # Transition date from Mathematica to Python
-default_parameter_list = [1, 0, 2, 0.2, 0.05, 0.2, 3, 3, 0.1, 3, 1] # Default parameters for the solver
+default_parameter_list = [1.0, 0.0, 2.0, 0.2, 0.05, 0.2, 3.0, 3.0, 0.1, 3.0, 1.0] # Default parameters for the solver
 dict_default_reinit_parameters = {
     "alpha": 0, "days": None, "r_s": 0, "r_dth": 0.02, "p_dth": 0, "r_dthdecay": 0,
     "k1": 0, "k2": 0, "jump": 0, "t_jump": 0, "std_normal": 1,

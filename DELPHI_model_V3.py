@@ -10,13 +10,17 @@ import numpy as np
 import multiprocessing as mp
 from scipy.integrate import solve_ivp
 from scipy.optimize import minimize
+import jax.numpy as jnp
+from jax import grad, jit
+from jax.scipy.optimize import minimize as jminimize
+from jax.experimental.ode import odeint as jax_odeint
 from datetime import datetime, timedelta
 from functools import partial
 from tqdm import tqdm_notebook as tqdm
 from scipy.optimize import dual_annealing
 from DELPHI_utils_V3_static import (
     DELPHIDataCreator, DELPHIAggregations, DELPHIDataSaver, get_initial_conditions,
-    get_mape_data_fitting, create_fitting_data_from_validcases, get_residuals_value
+    get_mape_data_fitting, create_fitting_data_from_validcases, get_residuals_value, jax_get_residuals_value
 )
 from DELPHI_utils_V3_dynamic import get_bounds_params_from_pastparams
 from DELPHI_params_V3 import (
@@ -265,12 +269,55 @@ def solve_and_predict_area(
                 dTHdt = r_d * p_d * p_h * I
                 dDVRdt = r_d * (1 - p_dth_mod) * p_d * p_h * p_v * I - r_rv * DVR
                 dDVDdt = r_d * p_dth_mod * p_d * p_h * p_v * I - r_dth * DVD
-                dDDdt = r_dth * (DHD + DQD)                                     # DHD + DQD + DVD
+                dDDdt = r_dth * (DHD + DQD)                                     # should be r_dth * (DHD + DQD + DVD)
                 dDTdt = r_d * p_d * I
                 return [
                     dSdt, dEdt, dIdt, dARdt, dDHRdt, dDQRdt, dADdt, dDHDdt,
                     dDQDdt, dRdt, dDdt, dTHdt, dDVRdt, dDVDdt, dDDdt, dDTdt,
                 ]
+
+            def jax_model_covid(
+                x, t, alpha, days, r_s, r_dth, p_dth, r_dthdecay, k1, k2, jump, t_jump, std_normal,
+            ) -> list:
+                """
+                JAX VERSION!!!!!!!!!!!!
+                """
+                r_i = jnp.log(2) / IncubeD  # Rate of infection leaving incubation phase
+                r_d = jnp.log(2) / DetectD  # Rate of detection
+                r_ri = jnp.log(2) / RecoverID  # Rate of recovery not under infection
+                r_rh = jnp.log(2) / RecoverHD  # Rate of recovery under hospitalization
+                r_rv = jnp.log(2) / VentilatedD  # Rate of recovery under ventilation
+                gamma_t = (
+                    (2 / jnp.pi) * jnp.arctan(-(t - days) / 20 * r_s) + 1
+                    + jump * jnp.exp(-(t - t_jump) ** 2 / (2 * std_normal ** 2))
+                )
+                p_dth_mod = (2 / jnp.pi) * (p_dth - 0.01) * (jnp.arctan(-t / 20 * r_dthdecay) + jnp.pi / 2) + 0.01
+                assert (
+                    len(x) == 16
+                ), f"Too many input variables, got {len(x)}, expected 16"
+                S, E, I, AR, DHR, DQR, AD, DHD, DQD, R, D, TH, DVR, DVD, DD, DT = x
+                # Equations on main variables
+                dSdt = -alpha * gamma_t * S * I / N
+                dEdt = alpha * gamma_t * S * I / N - r_i * E
+                dIdt = r_i * E - r_d * I
+                dARdt = r_d * (1 - p_dth_mod) * (1 - p_d) * I - r_ri * AR
+                dDHRdt = r_d * (1 - p_dth_mod) * p_d * p_h * I - r_rh * DHR     # should multiply entry rate by (1 - p_v)
+                dDQRdt = r_d * (1 - p_dth_mod) * p_d * (1 - p_h) * I - r_ri * DQR
+                dADdt = r_d * p_dth_mod * (1 - p_d) * I - r_dth * AD
+                dDHDdt = r_d * p_dth_mod * p_d * p_h * I - r_dth * DHD          # should multiply entry rate by (1 - p_v)
+                dDQDdt = r_d * p_dth_mod * p_d * (1 - p_h) * I - r_dth * DQD
+                dRdt = r_ri * (AR + DQR) + r_rh * DHR
+                dDdt = r_dth * (AD + DQD + DHD)
+                # Helper states (usually important for some kind of output)
+                dTHdt = r_d * p_d * p_h * I
+                dDVRdt = r_d * (1 - p_dth_mod) * p_d * p_h * p_v * I - r_rv * DVR
+                dDVDdt = r_d * p_dth_mod * p_d * p_h * p_v * I - r_dth * DVD
+                dDDdt = r_dth * (DHD + DQD)                                     # should be r_dth * (DHD + DQD + DVD)
+                dDTdt = r_d * p_d * I
+                return jnp.array([
+                    dSdt, dEdt, dIdt, dARdt, dDHRdt, dDQRdt, dADdt, dDHDdt,
+                    dDQDdt, dRdt, dDdt, dTHdt, dDVRdt, dDVDdt, dDDdt, dDTdt,
+                ])
 
             def residuals_totalcases(params) -> float:
                 """
@@ -316,13 +363,67 @@ def solve_and_predict_area(
                 )
                 return residuals_value
 
+            def jax_residuals_totalcases(params) -> float:
+                """
+                JAX VERSION!!!!!!!!!!!!
+                """
+                def jmax(a, b):
+                    return jnp.max(jnp.array([a, b]))
+                def jmin(a, b):
+                    return jnp.min(jnp.array([a, b]))
+                # Variables Initialization for the ODE system
+                alpha, days, r_s, r_dth, p_dth, r_dthdecay, k1, k2, jump, t_jump, std_normal = params
+
+                # Force params values to stay in a certain range during the optimization process with re-initializations
+                params = (
+                    jmax(alpha, dict_default_reinit_parameters["alpha"]),
+                    days,
+                    jmax(r_s, dict_default_reinit_parameters["r_s"]),
+                    jmax(jmin(r_dth, 1), dict_default_reinit_parameters["r_dth"]),
+                    jmax(jmin(p_dth, 1), dict_default_reinit_parameters["p_dth"]),
+                    jmax(r_dthdecay, dict_default_reinit_parameters["r_dthdecay"]),
+                    jmax(k1, dict_default_reinit_parameters["k1"]),
+                    jmax(k2, dict_default_reinit_parameters["k2"]),
+                    jmax(jump, dict_default_reinit_parameters["jump"]),
+                    jmax(t_jump, 0.6),
+                    jmax(std_normal,0.6),
+                )
+
+                x_0_cases = get_initial_conditions(
+                    params_fitted=params, global_params_fixed=GLOBAL_PARAMS_FIXED
+                )
+
+                x_sol = jax_odeint(
+                    jax_model_covid,
+                    jnp.asarray(x_0_cases, jnp.float32),
+                    jnp.asarray(t_cases, jnp.float32),
+                    *tuple(params) # consider also passing constants here
+                )
+                weights = list(range(1, len(cases_data_fit) + 1))
+
+                residuals_value = jax_get_residuals_value(
+                    optimizer=OPTIMIZER,
+                    balance=balance,
+                    x_sol=x_sol,#jnp.zeros((16, 91)),
+                    cases_data_fit=jnp.asarray(cases_data_fit),
+                    deaths_data_fit=jnp.asarray(deaths_data_fit),
+                    weights=jnp.asarray(weights)
+                )
+                return residuals_value
+
             if OPTIMIZER in ["tnc", "trust-constr"]:
-                output = minimize(
+                """output = minimize(
                     residuals_totalcases,
                     parameter_list,
                     method=OPTIMIZER,
                     bounds=bounds_params,
                     options={"maxiter": max_iter},
+                )"""
+                output = jminimize(
+                    jax_residuals_totalcases,
+                    jnp.asarray(parameter_list),
+                    method="BFGS",
+                    options={"maxiter": 100},
                 )
             elif OPTIMIZER == "annealing":
                 output = dual_annealing(
